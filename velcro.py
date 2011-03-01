@@ -11,9 +11,16 @@ import curses.panel
 import textwrap
 import traceback
 import re
+import time
+import os
+import os.path
+import shutil
 
 # grab this from the server.properties, yeah?
-map_location = "/home/landon/Desktop/mcbackupserver/unknown"
+map_location = "/home/landon/Desktop/mcbackupserver/"
+map_name = "unknown/"
+num_backups = 5
+backup_period = 10
 mem = "1024M"
 
 #Don't change anything below this line
@@ -40,6 +47,8 @@ class curses_helpers:
         curses_helpers.init_command_window("Messages")
         curses_helpers.init_command_window("Warnings")
         curses_helpers.init_command_window("Errors")
+        curses_helpers.init_command_window("Backups")
+        curses_helpers.init_command_window("Mapping")
         separator_win = curses.newwin(1, width, height-2, 0)
         curses.noecho()
         curses.cbreak()
@@ -92,6 +101,8 @@ class curses_helpers:
             window.insstr(eachline)
         if current_win == win:
             window.refresh()
+        else:
+            main_wins[current_win].window().refresh()
 
     @staticmethod
     def retrieve_input():
@@ -112,6 +123,11 @@ class curses_helpers:
                 else:
                     input_buffer += chr(char)
                     input_win.echochar(char)
+            elif char == curses.KEY_BACKSPACE:
+                (y,x) = input_win.getyx()
+                if x>2:
+                    input_win.move(y,x-1)
+                    input_win.delch(y,x-1)
             else:
                 # it's a control signal or somesuch!
                 curses_helpers.control_input(char)
@@ -147,7 +163,7 @@ class server_helpers:
     warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
     logins_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (\S+ (\[[^]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))|Connected players: (?P<players>.*)))')
     chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
-    PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+) (.*) to (?P<to>\S+))')
+    PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
     java_re = re.compile(r'(?P<error>(?:java|at) .*)')
 
     @staticmethod
@@ -195,7 +211,7 @@ class server_helpers:
 
     @staticmethod
     def find_loc(Player, map_location):
-        nbt_filename = "%s/players/%s.dat" % (map_location, Player)
+        nbt_filename = "%s%s/players/%s.dat" % (map_location, map_name, Player)
         nbt_file = nbt.NBTFile(nbt_filename, 'rb')
         (x,z,y) = nbt_file["Pos"].tags
         return "say %d %d %d" % (x.value,y.value,z.value)
@@ -203,6 +219,60 @@ class server_helpers:
     @staticmethod
     def add_to_queue(command):
         server_helpers.cmd_queue.append("%s\n" % command)
+
+class backup_helpers:
+    backup_dir = "%s/velcro/backups/%s/" % (map_location, map_name)
+    backup_command = "rsync -av --delete --link-dest=%s %s %s" % ("%s", "%s%s" % (map_location, map_name), "%s/")
+    first_backup_command = "rsync -av %s %s" % ("%s%s" % (map_location, map_name), "%s/")
+    backup_process = None
+    in_progress = False
+    time_last_backup = time.time()
+
+    @staticmethod
+    def start_backup():
+        # going to create backup and then sort the filenames and delete the lowest, sine they will be named by date
+        curses_helpers.display_output("Starting backups", win_name="Backups")
+        linkdest = backup_helpers.get_most_recent()
+        linkdest_path = "%s%s" % (backup_helpers.backup_dir, linkdest)
+        new_backup_dir = "%s%s" % (backup_helpers.backup_dir, time.strftime("%Y-%m-%d.%H-%M-%S"))
+        if linkdest == None:
+            args = shlex.split(backup_helpers.first_backup_command % (new_backup_dir))
+            curses_helpers.display_output(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups")
+        else:
+            args = shlex.split(backup_helpers.backup_command % (linkdest_path, new_backup_dir))
+            curses_helpers.display_output(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups")
+        backup_helpers.backup_process = subprocess.Popen(args, \
+            stdout=subprocess.PIPE, \
+            stderr=subprocess.PIPE)
+        backup_helpers.trim_backups()
+
+    @staticmethod
+    def get_most_recent():
+        backups = os.listdir(backup_helpers.backup_dir)
+        if len(backups) == 0:
+            return None
+        else:
+            backups.sort()
+            return backups.pop()
+
+    @staticmethod
+    def get_least_recent():
+        least_recent = []
+        backups = os.listdir(backup_helpers.backup_dir)
+        backups.sort()
+        while len(backups) > num_backups:
+            least_recent.append(backups.pop(0))
+        return least_recent
+
+    @staticmethod
+    def trim_backups():
+        to_prune = backup_helpers.get_least_recent()
+        for backup in to_prune:
+            backup_path = "%s%s" % (backup_helpers.backup_dir, backup)
+            shutil.rmtree(backup_path, True)
+
+
+
 
 @atexit.register
 def clean_up():
@@ -216,8 +286,13 @@ def clean_up():
         server_proc.terminate()
     print "Minecraft closed, so let's shut down."
 
+def check_directories():
+    if not os.path.exists("%s/velcro/backups/%s" % (map_location, map_name)):
+        os.makedirs("%s/velcro/backups/%s" % (map_location, map_name))
+
 def run():
     global server_proc, map_location, mem
+    check_directories()
     curses_helpers.init_curses()
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
     args = shlex.split(server_command)
@@ -227,12 +302,16 @@ def run():
             stderr=subprocess.PIPE)
 
     while server_proc.poll() == None:
+        read_list = [server_proc.stdout, server_proc.stderr, sys.stdin]
+        if backup_helpers.backup_process != None:
+            read_list.append(backup_helpers.backup_process.stdout)
+            read_list.append(backup_helpers.backup_process.stderr)
         (rlist, wlist, xlist) = select.select( \
-                [server_proc.stdout, server_proc.stderr, sys.stdin], \
+                read_list, \
                 [], \
 # Seems to be why we take up 99% CPU so let's assume it's always ready
 #                [server_proc.stdin,], \
-                [])
+                [], 1)
 
         console_input = curses_helpers.retrieve_input()
         if console_input:
@@ -247,10 +326,25 @@ def run():
                 line = r.readline().strip()
                 if len(line) > 0:
                     server_helpers.parse_line(line)
+            elif backup_helpers.backup_process != None:
+                if r == backup_helpers.backup_process.stdout or r == backup_helpers.backup_process.stderr:
+                    line = r.readline().strip()
+                    if len(line) > 0:
+                        curses_helpers.display_output(line, win_name="Backups")
 
         if (len(server_helpers.cmd_queue) > 0):
             server_proc.stdin.writelines(server_helpers.cmd_queue)
             server_helpers.cmd_queue = []
+
+        if (time.time()-backup_helpers.time_last_backup) > backup_period and not backup_helpers.in_progress:
+            backup_helpers.in_progress = True
+            backup_helpers.start_backup()
+        elif backup_helpers.in_progress:
+            if backup_helpers.backup_process.poll() != None:
+                backup_helpers.in_progress = False
+                backup_helpers.time_last_backup = time.time()
+                backup_helpers.backup_process = None
+
 
 
 if __name__ == "__main__":
