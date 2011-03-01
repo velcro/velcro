@@ -65,7 +65,7 @@ class curses_helpers:
 
     @staticmethod
     def init_command_window(name):
-        global main_wins, stdscr
+        global main_wins, stdscr, main_names
         (height,width) = stdscr.getmaxyx()
         win = curses.newwin(height-2, width, 0, 0)
         win.scrollok(True)
