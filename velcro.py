@@ -38,6 +38,8 @@ class curses_helpers:
     @staticmethod
     def init_curses():
         global stdscr, input_win, separator_win, main_wins, current_win
+        main_wins = []
+        main_names = []
         stdscr = curses.initscr()
         stdscr.refresh()
         (height,width) = stdscr.getmaxyx()
