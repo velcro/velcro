@@ -13,105 +13,122 @@ import traceback
 
 stdscr = None
 input_win = None
-seperator_win = None
+separator_win = None
 server_proc = None
 input_buffer = ""
 main_wins = []
+main_names = []
 current_win = 0
 
-def init_curses():
-    global stdscr, input_win, seperator_win, main_wins
-    stdscr = curses.initscr()
-    stdscr.refresh()
-    (height,width) = stdscr.getmaxyx()
-    input_win = curses.newwin(1, width, height-1, 0)
-    output_win = curses.newwin(height-2, width, 0, 0)
-    output_panel = curses.panel.new_panel(output_win)
-    main_wins.append(output_panel)
-    seperator_win = curses.newwin(1, width, height-2, 0)
-    output_win.scrollok(True)
-    curses.noecho()
-    curses.cbreak()
-#curses.curs_set(1)
-    stdscr.keypad(1)
-    input_win.keypad(1)
-    output_win.keypad(1)
-    seperator_win.hline(curses.ACS_HLINE, width)
-    seperator_win.refresh()
-    input_win.echochar(ord('>'))
-    input_win.echochar(ord(' '))
-    input_win.nodelay(1)
-    input_win.refresh()
+class curses_helpers:
+    @staticmethod
+    def init_curses():
+        global stdscr, input_win, separator_win, main_wins, current_win
+        stdscr = curses.initscr()
+        stdscr.refresh()
+        (height,width) = stdscr.getmaxyx()
+        input_win = curses.newwin(1, width, height-1, 0)
+        curses_helpers.init_command_window("Minecraft Server")
+        separator_win = curses.newwin(1, width, height-2, 0)
+        curses.noecho()
+        curses.cbreak()
+        curses.curs_set(0)
+        stdscr.keypad(1)
+        input_win.keypad(1)
+        curses_helpers.display_window_name(main_names[current_win])
+        separator_win.refresh()
+        input_win.echochar(ord('>'))
+        input_win.echochar(ord(' '))
+        input_win.nodelay(1)
 
-def init_command_window():
-    global main_wins, stdscr
-    (height,width) = stdscr.getmaxyx()
-    win = curses.newwin(height-2, width, 0, 0)
-    win.scrollok(True)
-    win.keypad(1)
-    win.refresh()
-    panel = curses.panel.new_panel(win)
-    main_wins.append(panel)
+    @staticmethod
+    def init_command_window(name):
+        global main_wins, stdscr
+        (height,width) = stdscr.getmaxyx()
+        win = curses.newwin(height-2, width, 0, 0)
+        win.scrollok(True)
+        win.keypad(1)
+        win.refresh()
+        panel = curses.panel.new_panel(win)
+        main_wins.append(panel)
+        main_names.append(name)
+
+    @staticmethod
+    def display_window_name(name):
+        global separator_win
+        name = name+" |"
+        (height, width) = separator_win.getmaxyx()
+        separator_win.move(0,0)
+        separator_win.insstr(name)
+        separator_win.move(0,len(name))
+        separator_win.hline(curses.ACS_HLINE, width-len(name))
+        separator_win.refresh()
+
+    @staticmethod
+    def display_output(line, win=None):
+        global main_wins, current_win
+        if win == None:
+            window = main_wins[current_win].window()
+        else:
+            window = main_wins[win].window()
+        (height,width) = window.getmaxyx()
+        lines = textwrap.wrap(line, width)
+        for eachline in lines:
+            window.move(height-1,0)
+            window.scroll()
+            window.insstr(eachline)
+        if win == None or current_win == win:
+            window.refresh()
+
+    @staticmethod
+    def retrieve_input():
+        global input_win, input_buffer, current_win, main_wins, main_names
+        while True:
+            char = input_win.getch()
+            if char == -1:
+                break
+            if char <= 128:
+                input_buffer += chr(char)
+                if char == ord('\n'):
+                    input_win.deleteln()
+                    input_win.move(0,0)
+                    input_win.echochar(ord('>'))
+                    input_win.echochar(ord(' '))
+                    retstr = input_buffer
+                    input_buffer = ""
+                    return retstr
+                else:
+                    input_win.echochar(char)
+            else:
+                # it's a control signal or somesuch!
+                if char == curses.KEY_RESIZE:
+                    init_curses()
+                elif char == curses.KEY_RIGHT:
+                    current_win = (current_win+1)%len(main_wins)
+                    curses_helpers.display_window_name(main_names[current_win])
+                    main_wins[current_win].top()
+                    curses.panel.update_panels()
+                    main_wins[current_win].window().refresh()
+                    curses.doupdate()
+
+    @staticmethod
+    def reset_curses():
+        global stdscr,input_win
+        curses.nocbreak()
+        stdscr.keypad(0)
+        input_win.keypad(0)
+        curses.echo()
+        curses.endwin()
+
 
 @atexit.register
 def clean_up():
     global server_proc
-    reset_curses()
+    curses_helpers.reset_curses()
+    traceback.print_last()
     if server_proc.poll() == None:
         server_proc.terminate()
     print "Minecraft closed, so let's shut down."
-
-def reset_curses():
-    global stdscr,input_win
-    curses.nocbreak()
-    stdscr.keypad(0)
-    input_win.keypad(0)
-    curses.echo()
-    curses.endwin()
-
-def display_output(line, win=None):
-    global main_wins, current_win
-    if win == None:
-        window = main_wins[current_win].window()
-    else:
-        window = main_wins[win].window()
-    (height,width) = window.getmaxyx()
-    lines = textwrap.wrap(line, width)
-    for eachline in lines:
-        window.move(height-1,0)
-        window.scroll()
-        window.insstr(eachline)
-    if win == None or current_win == win:
-        window.refresh()
-
-def retrieve_input():
-    global input_win, input_buffer, current_win, main_wins
-    while True:
-        char = input_win.getch()
-        if char == -1:
-            break
-        if char <= 128:
-            input_buffer += chr(char)
-            if char == ord('\n'):
-                input_win.deleteln()
-                input_win.move(0,0)
-                input_win.echochar(ord('>'))
-                input_win.echochar(ord(' '))
-                retstr = input_buffer
-                input_buffer = ""
-                return retstr
-            else:
-                input_win.echochar(char)
-        else:
-            # it's a control signal or somesuch!
-            if char == curses.KEY_RESIZE:
-                init_curses()
-            elif char == curses.KEY_RIGHT:
-                current_win = (current_win+1)%len(main_wins)
-                main_wins[current_win].top()
-                curses.panel.update_panels()
-                curses.doupdate()
-            return
 
 def get_command(line):
     line = line.split()
@@ -131,7 +148,7 @@ def find_loc(Player, map_location):
 
 def run():
     global server_proc, stdscr
-    init_curses()
+    curses_helpers.init_curses()
     mem = "1024M"
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
 # grab this from the server.properties, yeah?
@@ -144,17 +161,16 @@ def run():
 
     console_input = sys.stdin
     cmd_queue = []
-    init_command_window()
 
     while server_proc.poll() == None:
         (rlist, wlist, xlist) = select.select( \
                 [server_proc.stdout, server_proc.stderr], \
                 [server_proc.stdin,], \
-                [], .1)
+                [], .01)
 
-        console_input = retrieve_input()
+        console_input = curses_helpers.retrieve_input()
         if console_input:
-            display_output(console_input)
+            curses_helpers.display_output(console_input)
             if current_win == 0:
                 cmd_queue.append(console_input)
 
@@ -162,7 +178,7 @@ def run():
             line = r.readline().strip()
             if r == server_proc.stdout or r == server_proc.stderr:
                 if len(line) > 0:
-                    display_output(line, 0)
+                    curses_helpers.display_output(line, 0)
 #print line
                     (player, player_cmd) = get_command(line)
                     if player_cmd:
@@ -176,7 +192,6 @@ def run():
                     command = cmd_queue.pop(0)
                     w.write("%s" % command)
 
-        stdscr.refresh()
 
 
 if __name__ == "__main__":
