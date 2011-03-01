@@ -32,16 +32,29 @@ server_proc = None
 input_buffer = ""
 main_wins = []
 main_names = []
+color_pairs = {}
 current_win = 0
 
 class curses_helpers:
     @staticmethod
     def init_curses():
-        global stdscr, input_win, separator_win, main_wins, current_win, main_names
+        global stdscr, input_win, separator_win, main_wins, current_win, main_names, color_pairs
         main_wins = []
         main_names = []
         current_win = 0
         stdscr = curses.initscr()
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_YELLOW, -1)
+        curses.init_pair(2, curses.COLOR_CYAN, -1)
+        curses.init_pair(3, curses.COLOR_RED, -1)
+        curses.init_pair(4, curses.COLOR_GREEN, -1)
+        curses.init_pair(5, curses.COLOR_MAGENTA, -1)
+        color_pairs['warning'] = 1
+        color_pairs['info'] = 2
+        color_pairs['error'] = 3
+        color_pairs['chat'] = 4
+        color_pairs['player'] = 5
         stdscr.refresh()
         (height,width) = stdscr.getmaxyx()
         input_win = curses.newwin(1, width, height-1, 0)
@@ -91,8 +104,8 @@ class curses_helpers:
         separator_win.refresh()
 
     @staticmethod
-    def display_output(line, win=None, win_name=None):
-        global main_wins, main_names, current_win
+    def display_output(line, win=None, win_name=None, color=None):
+        global main_wins, main_names, current_win, color_pairs
         if win_name != None:
             win = main_names.index(win_name)
         if win == None:
@@ -104,7 +117,11 @@ class curses_helpers:
         for eachline in lines:
             window.move(height-1,0)
             window.scroll()
-            window.insstr(eachline)
+            if color == None:
+                window.insstr(eachline)
+            else:
+                color_id = color_pairs[color]
+                window.insstr(eachline, curses.color_pair(color_id))
         if current_win == win:
             window.refresh()
         else:
@@ -181,32 +198,32 @@ class server_helpers:
             name = match.group('name').strip("<>[]")
             if not name == "CONSOLE":
                 server_helpers.player_cmd(name, chat_message)
-            curses_helpers.display_output(message, win_name="Messages")
+            curses_helpers.display_output(message, win_name="Messages", color="chat")
             return
         match = server_helpers.PM_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Messages")
+            curses_helpers.display_output(message, win_name="Messages", color="chat")
             return
         match = server_helpers.logins_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Players")
+            curses_helpers.display_output(message, win_name="Players", color="player")
             return
         match = server_helpers.warning_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Warnings")
-            curses_helpers.display_output(message, win_name="Minecraft Server")
+            curses_helpers.display_output(message, win_name="Warnings", color="warning")
+            curses_helpers.display_output(message, win_name="Minecraft Server", color="warning")
             return
         match = server_helpers.java_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Errors")
-            curses_helpers.display_output(message, win_name="Minecraft Server")
+            curses_helpers.display_output(message, win_name="Errors", color="error")
+            curses_helpers.display_output(message, win_name="Minecraft Server", color="error")
             return
         else:
-            curses_helpers.display_output(line, win_name="Minecraft Server")
+            curses_helpers.display_output(line, win_name="Minecraft Server", color="info")
         line = line.split()
 
     @staticmethod
