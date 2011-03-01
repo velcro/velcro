@@ -12,6 +12,12 @@ import textwrap
 import traceback
 import re
 
+# grab this from the server.properties, yeah?
+map_location = "/home/landon/Desktop/mcbackupserver/unknown"
+mem = "1024M"
+
+#Don't change anything below this line
+
 stdscr = None
 input_win = None
 separator_win = None
@@ -20,9 +26,6 @@ input_buffer = ""
 main_wins = []
 main_names = []
 current_win = 0
-
-class server_re:
-    pass
 
 class curses_helpers:
     @staticmethod
@@ -33,7 +36,7 @@ class curses_helpers:
         (height,width) = stdscr.getmaxyx()
         input_win = curses.newwin(1, width, height-1, 0)
         curses_helpers.init_command_window("Minecraft Server")
-        curses_helpers.init_command_window("CONSOLE")
+        curses_helpers.init_command_window("Players")
         curses_helpers.init_command_window("Messages")
         curses_helpers.init_command_window("Private Messages")
         curses_helpers.init_command_window("Warnings")
@@ -73,9 +76,11 @@ class curses_helpers:
         separator_win.refresh()
 
     @staticmethod
-    def display_output(line, win=None):
-        global main_wins, current_win
-        if win == None:
+    def display_output(line, win=None, win_name=None):
+        global main_wins, main_names, current_win
+        if win_name != None:
+            window = main_wins[main_names.index(win_name)].window()
+        elif win == None:
             window = main_wins[current_win].window()
         else:
             window = main_wins[win].window()
@@ -137,47 +142,80 @@ class curses_helpers:
         curses.echo()
         curses.endwin()
 
+class server_helpers:
+    cmd_queue = []
+    warning_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[WARNING\] .*)')
+    logins_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (\S+ (\[[^]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))|Connected players: (?P<players>.*)))')
+    chat_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (\[(?P<name>CONSOLE)\]|\<\(?P<name>S+)\>) (?P<chat>.*))')
+    PM_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (?P<from>\S+) (.*) to (?P<to>\S+))')
+
+    @staticmethod
+    def parse_line(line):
+        match = chat_re.match(line)
+        if match:
+            message = match.group('message')
+            chat_message = match.group('chat')
+            name = match.group('name')
+            if not name == "CONSOLE":
+                server_helpers.player_cmd(name, chat_message)
+            curses_helpers.display_out(message, win_name="Messages")
+            return
+        match = PM_re.match(line)
+        if match:
+            message = match.group('message')
+            curses_helpers.display_out(message, win_name="Private Messages")
+            return
+        match = logins_re.match(line)
+        if match:
+            message = match.group('message')
+            curses_helpers.display_out(message, win_name="Players")
+            return
+        match = warning_re.match(line)
+        if match:
+            message = match.group('message')
+            curses_helpers.display_out(message, win_name="Warnings")
+            curses_helpers.display_out(message, win_name="Minecraft Server")
+            return
+        else:
+            curses_helpers.display_out(line, win_name="Minecraft Server")
+        line = line.split()
+
+    @staticmethod
+    def player_cmd(name, message):
+        tokens = message.split()
+        if tokens[0] == "loc":
+            server_helpers.cmd_queue.append(server_helpers.find_loc(player, map_location))
+
+    @staticmethod
+    def find_loc(Player, map_location):
+        nbt_filename = "%s/players/%s.dat" % (map_location, Player)
+        nbt_file = nbt.NBTFile(nbt_filename, 'rb')
+        (x,z,y) = nbt_file["Pos"].tags
+        return "say %d %d %d" % (x.value,y.value,z.value)
+
+
 
 @atexit.register
 def clean_up():
     global server_proc
     curses_helpers.reset_curses()
-    traceback.print_last()
+    try:
+        traceback.print_last()
+    except:
+        pass
     if server_proc.poll() == None:
         server_proc.terminate()
     print "Minecraft closed, so let's shut down."
 
-def get_command(line):
-    line = line.split()
-    if len(line) > 3:
-        player = line[3].strip('<>')
-        command = ' '.join(line[4:])
-    else:
-        player = None
-        command = None
-    return (player, command)
-
-def find_loc(Player, map_location):
-    nbt_filename = "%s/players/%s.dat" % (map_location, Player)
-    nbt_file = nbt.NBTFile(nbt_filename, 'rb')
-    (x,z,y) = nbt_file["Pos"].tags
-    return "say %d %d %d" % (x.value,y.value,z.value)
-
 def run():
-    global server_proc, stdscr
+    global server_proc, map_location, mem
     curses_helpers.init_curses()
-    mem = "1024M"
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
-# grab this from the server.properties, yeah?
-    map_location = "/home/landon/Desktop/mcbackupserver/unknown"
     args = shlex.split(server_command)
     server_proc = subprocess.Popen(args, \
             stdin=subprocess.PIPE, \
             stdout=subprocess.PIPE, \
             stderr=subprocess.PIPE)
-
-    console_input = sys.stdin
-    cmd_queue = []
 
     while server_proc.poll() == None:
         (rlist, wlist, xlist) = select.select( \
@@ -190,26 +228,20 @@ def run():
         console_input = curses_helpers.retrieve_input()
         if console_input:
             curses_helpers.display_output(console_input)
-            if current_win == 0:
-                cmd_queue.append(console_input)
+            if current_win == main_names.index("Minecraft Server"):
+                server_helpers.cmd_queue.append(console_input)
+            elif current_win == main_names.index("Messages"):
+                server_helpers.cmd_queue.append("say %s" % console_input)
 
         for r in rlist:
             if r == server_proc.stdout or r == server_proc.stderr:
                 line = r.readline().strip()
                 if len(line) > 0:
-                    curses_helpers.display_output(line, 0)
-#print line
-                    (player, player_cmd) = get_command(line)
-                    if player_cmd:
-                        # 2011-02-28 14:02:31 [INFO] <TensaiRonin> lol it mapped a world hole
-                        if player_cmd == "loc":
-                            loc = find_loc(player, map_location)
-                            cmd_queue.append("say %s") % loc
+                    server_helpers.parse_line(line)
 
-        if (len(cmd_queue) > 0):
-            command = cmd_queue.pop(0)
-            w.write("%s" % command)
-
+        if (len(server_helpers.cmd_queue) > 0):
+            command = server_helpers.cmd_queue.pop(0)
+            server_proc.stdin.write("%s" % command)
 
 
 if __name__ == "__main__":
