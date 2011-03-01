@@ -140,7 +140,7 @@ class curses_helpers:
     def control_input(char):
         global current_win, main_wins, main_names
         if char == curses.KEY_RESIZE:
-            init_curses()
+            curses_helpers.init_curses()
         elif char == curses.KEY_RIGHT or char == curses.KEY_UP or char == curses.KEY_LEFT or char == curses.KEY_DOWN:
             direction = 1
             if char == curses.KEY_LEFT or char == curses.KEY_DOWN:
