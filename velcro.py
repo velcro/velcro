@@ -37,7 +37,7 @@ current_win = 0
 class curses_helpers:
     @staticmethod
     def init_curses():
-        global stdscr, input_win, separator_win, main_wins, current_win
+        global stdscr, input_win, separator_win, main_wins, current_win, main_names
         main_wins = []
         main_names = []
         current_win = 0
