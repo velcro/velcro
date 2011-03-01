@@ -29,6 +29,7 @@ class curses_helpers:
         (height,width) = stdscr.getmaxyx()
         input_win = curses.newwin(1, width, height-1, 0)
         curses_helpers.init_command_window("Minecraft Server")
+        curses_helpers.init_command_window("Test")
         separator_win = curses.newwin(1, width, height-2, 0)
         curses.noecho()
         curses.cbreak()
@@ -82,7 +83,7 @@ class curses_helpers:
 
     @staticmethod
     def retrieve_input():
-        global input_win, input_buffer, current_win, main_wins, main_names
+        global input_win, input_buffer
         while True:
             char = input_win.getch()
             if char == -1:
@@ -101,15 +102,24 @@ class curses_helpers:
                     input_win.echochar(char)
             else:
                 # it's a control signal or somesuch!
-                if char == curses.KEY_RESIZE:
-                    init_curses()
-                elif char == curses.KEY_RIGHT:
-                    current_win = (current_win+1)%len(main_wins)
-                    curses_helpers.display_window_name(main_names[current_win])
-                    main_wins[current_win].top()
-                    curses.panel.update_panels()
-                    main_wins[current_win].window().refresh()
-                    curses.doupdate()
+                curses_helpers.control_input(char)
+
+
+    @staticmethod
+    def control_input(char):
+        global current_win, main_wins, main_names
+        if char == curses.KEY_RESIZE:
+            init_curses()
+        elif char == curses.KEY_RIGHT or char == curses.KEY_UP or char == curses.KEY_LEFT or char == curses.KEY_DOWN:
+            direction = 1
+            if char == curses.KEY_LEFT or char == curses.KEY_DOWN:
+                direction = -1
+            current_win = (current_win+direction)%len(main_wins)
+            curses_helpers.display_window_name(main_names[current_win])
+            main_wins[current_win].top()
+            curses.panel.update_panels()
+            main_wins[current_win].window().refresh()
+            curses.doupdate()
 
     @staticmethod
     def reset_curses():
