@@ -40,6 +40,7 @@ class curses_helpers:
         global stdscr, input_win, separator_win, main_wins, current_win
         main_wins = []
         main_names = []
+        current_win = 0
         stdscr = curses.initscr()
         stdscr.refresh()
         (height,width) = stdscr.getmaxyx()
