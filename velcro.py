@@ -311,7 +311,7 @@ def run():
                 [], \
 # Seems to be why we take up 99% CPU so let's assume it's always ready
 #                [server_proc.stdin,], \
-                [], 1)
+                [], .1)
 
         console_input = curses_helpers.retrieve_input()
         if console_input:
@@ -338,12 +338,17 @@ def run():
 
         if (time.time()-backup_helpers.time_last_backup) > backup_period and not backup_helpers.in_progress:
             backup_helpers.in_progress = True
+            server_helpers.add_to_queue("save-off")
+            server_helpers.add_to_queue("save-all")
+            server_helpers.add_to_queue("say Starting backups!")
             backup_helpers.start_backup()
         elif backup_helpers.in_progress:
             if backup_helpers.backup_process.poll() != None:
                 backup_helpers.in_progress = False
                 backup_helpers.time_last_backup = time.time()
                 backup_helpers.backup_process = None
+                server_helpers.add_to_queue("save-on")
+                server_helpers.add_to_queue("say Backups over!")
 
 
 
