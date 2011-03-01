@@ -309,12 +309,15 @@ def run():
         if backup_helpers.backup_process != None:
             read_list.append(backup_helpers.backup_process.stdout)
             read_list.append(backup_helpers.backup_process.stderr)
-        (rlist, wlist, xlist) = select.select( \
-                read_list, \
-                [], \
+        try:
+            (rlist, wlist, xlist) = select.select( \
+                    read_list, \
+                    [], \
 # Seems to be why we take up 99% CPU so let's assume it's always ready
 #                [server_proc.stdin,], \
-                [], .1)
+                    [], .1)
+        except:
+            continue
 
         console_input = curses_helpers.retrieve_input()
         if console_input:
