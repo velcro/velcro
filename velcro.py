@@ -7,23 +7,27 @@ import select
 import nbt
 import atexit
 import curses
+import curses.panel
 import textwrap
 import traceback
 
 stdscr = None
-output_win = None
 input_win = None
 seperator_win = None
 server_proc = None
 input_buffer = ""
+main_wins = []
+current_win = 0
 
 def init_curses():
-    global stdscr, output_win, input_win, seperator_win
+    global stdscr, input_win, seperator_win, main_wins
     stdscr = curses.initscr()
     stdscr.refresh()
     (height,width) = stdscr.getmaxyx()
     input_win = curses.newwin(1, width, height-1, 0)
     output_win = curses.newwin(height-2, width, 0, 0)
+    output_panel = curses.panel.new_panel(output_win)
+    main_wins.append(output_panel)
     seperator_win = curses.newwin(1, width, height-2, 0)
     output_win.scrollok(True)
     curses.noecho()
@@ -37,35 +41,51 @@ def init_curses():
     input_win.echochar(ord('>'))
     input_win.echochar(ord(' '))
     input_win.nodelay(1)
+    input_win.refresh()
+
+def init_command_window():
+    global main_wins, stdscr
+    (height,width) = stdscr.getmaxyx()
+    win = curses.newwin(height-2, width, 0, 0)
+    win.scrollok(True)
+    win.keypad(1)
+    win.refresh()
+    panel = curses.panel.new_panel(win)
+    main_wins.append(panel)
 
 @atexit.register
 def clean_up():
     global server_proc
     reset_curses()
-    if server_proc.poll() != None:
+    if server_proc.poll() == None:
         server_proc.terminate()
+    print "Minecraft closed, so let's shut down."
 
 def reset_curses():
-    global stdscr
+    global stdscr,input_win
     curses.nocbreak()
     stdscr.keypad(0)
     input_win.keypad(0)
-    output_win.keypad(0)
     curses.echo()
     curses.endwin()
 
-def display_output(line):
-    global output_win
-    (height,width) = output_win.getmaxyx()
+def display_output(line, win=None):
+    global main_wins, current_win
+    if win == None:
+        window = main_wins[current_win].window()
+    else:
+        window = main_wins[win].window()
+    (height,width) = window.getmaxyx()
     lines = textwrap.wrap(line, width)
     for eachline in lines:
-        output_win.move(height-1,0)
-        output_win.scroll()
-        output_win.insstr(eachline)
-    output_win.refresh()
+        window.move(height-1,0)
+        window.scroll()
+        window.insstr(eachline)
+    if win == None or current_win == win:
+        window.refresh()
 
 def retrieve_input():
-    global input_win, input_buffer
+    global input_win, input_buffer, current_win, main_wins
     while True:
         char = input_win.getch()
         if char == -1:
@@ -84,6 +104,13 @@ def retrieve_input():
                 input_win.echochar(char)
         else:
             # it's a control signal or somesuch!
+            if char == curses.KEY_RESIZE:
+                init_curses()
+            elif char == curses.KEY_RIGHT:
+                current_win = (current_win+1)%len(main_wins)
+                main_wins[current_win].top()
+                curses.panel.update_panels()
+                curses.doupdate()
             return
 
 def get_command(line):
@@ -103,10 +130,7 @@ def find_loc(Player, map_location):
     return "say %d %d %d" % (x.value,y.value,z.value)
 
 def run():
-    global server_proc
-    global stdscr
-    global input_win
-    global output_win
+    global server_proc, stdscr
     init_curses()
     mem = "1024M"
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
@@ -120,6 +144,7 @@ def run():
 
     console_input = sys.stdin
     cmd_queue = []
+    init_command_window()
 
     while server_proc.poll() == None:
         (rlist, wlist, xlist) = select.select( \
@@ -130,12 +155,14 @@ def run():
         console_input = retrieve_input()
         if console_input:
             display_output(console_input)
+            if current_win == 0:
+                cmd_queue.append(console_input)
 
         for r in rlist:
             line = r.readline().strip()
             if r == server_proc.stdout or r == server_proc.stderr:
                 if len(line) > 0:
-                    display_output(line)
+                    display_output(line, 0)
 #print line
                     (player, player_cmd) = get_command(line)
                     if player_cmd:
@@ -147,12 +174,10 @@ def run():
             if w == server_proc.stdin:
                 if (len(cmd_queue) > 0):
                     command = cmd_queue.pop(0)
-                    w.write("%s\n" % command)
+                    w.write("%s" % command)
 
         stdscr.refresh()
 
-
-    print "Minecraft closed, so let's shut down."
 
 if __name__ == "__main__":
     run()
