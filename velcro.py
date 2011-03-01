@@ -77,11 +77,14 @@ class curses_helpers:
     def display_window_name(name):
         global separator_win
         name = name+" |"
+        brand = "| Velcro"
         (height, width) = separator_win.getmaxyx()
         separator_win.move(0,0)
         separator_win.insstr(name)
         separator_win.move(0,len(name))
-        separator_win.hline(curses.ACS_HLINE, width-len(name))
+        separator_win.hline(curses.ACS_HLINE, width-len(name)-len(brand))
+        separator_win.move(0,width-len(brand))
+        separator_win.insstr(brand)
         separator_win.refresh()
 
     @staticmethod
