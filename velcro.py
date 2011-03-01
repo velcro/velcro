@@ -10,6 +10,7 @@ import curses
 import curses.panel
 import textwrap
 import traceback
+import re
 
 stdscr = None
 input_win = None
@@ -19,6 +20,9 @@ input_buffer = ""
 main_wins = []
 main_names = []
 current_win = 0
+
+class server_re:
+    pass
 
 class curses_helpers:
     @staticmethod
@@ -177,9 +181,11 @@ def run():
 
     while server_proc.poll() == None:
         (rlist, wlist, xlist) = select.select( \
-                [server_proc.stdout, server_proc.stderr], \
-                [server_proc.stdin,], \
-                [], .01)
+                [server_proc.stdout, server_proc.stderr, sys.stdin], \
+                [], \
+# Seems to be why we take up 99% CPU so let's assume it's always ready
+#                [server_proc.stdin,], \
+                [])
 
         console_input = curses_helpers.retrieve_input()
         if console_input:
@@ -188,8 +194,8 @@ def run():
                 cmd_queue.append(console_input)
 
         for r in rlist:
-            line = r.readline().strip()
             if r == server_proc.stdout or r == server_proc.stderr:
+                line = r.readline().strip()
                 if len(line) > 0:
                     curses_helpers.display_output(line, 0)
 #print line
@@ -199,11 +205,10 @@ def run():
                         if player_cmd == "loc":
                             loc = find_loc(player, map_location)
                             cmd_queue.append("say %s") % loc
-        for w in wlist:
-            if w == server_proc.stdin:
-                if (len(cmd_queue) > 0):
-                    command = cmd_queue.pop(0)
-                    w.write("%s" % command)
+
+        if (len(cmd_queue) > 0):
+            command = cmd_queue.pop(0)
+            w.write("%s" % command)
 
 
 
