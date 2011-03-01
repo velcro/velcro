@@ -38,8 +38,8 @@ class curses_helpers:
         curses_helpers.init_command_window("Minecraft Server")
         curses_helpers.init_command_window("Players")
         curses_helpers.init_command_window("Messages")
-        curses_helpers.init_command_window("Private Messages")
         curses_helpers.init_command_window("Warnings")
+        curses_helpers.init_command_window("Errors")
         separator_win = curses.newwin(1, width, height-2, 0)
         curses.noecho()
         curses.cbreak()
@@ -79,8 +79,8 @@ class curses_helpers:
     def display_output(line, win=None, win_name=None):
         global main_wins, main_names, current_win
         if win_name != None:
-            window = main_wins[main_names.index(win_name)].window()
-        elif win == None:
+            win = main_names.index(win_name)
+        if win == None:
             window = main_wins[current_win].window()
         else:
             window = main_wins[win].window()
@@ -90,7 +90,7 @@ class curses_helpers:
             window.move(height-1,0)
             window.scroll()
             window.insstr(eachline)
-        if win == None or current_win == win:
+        if current_win == win:
             window.refresh()
 
     @staticmethod
@@ -101,7 +101,6 @@ class curses_helpers:
             if char == -1:
                 break
             if char <= 128:
-                input_buffer += chr(char)
                 if char == ord('\n'):
                     input_win.deleteln()
                     input_win.move(0,0)
@@ -111,6 +110,7 @@ class curses_helpers:
                     input_buffer = ""
                     return retstr
                 else:
+                    input_buffer += chr(char)
                     input_win.echochar(char)
             else:
                 # it's a control signal or somesuch!
@@ -144,47 +144,54 @@ class curses_helpers:
 
 class server_helpers:
     cmd_queue = []
-    warning_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[WARNING\] .*)')
-    logins_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (\S+ (\[[^]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))|Connected players: (?P<players>.*)))')
-    chat_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (\[(?P<name>CONSOLE)\]|\<\(?P<name>S+)\>) (?P<chat>.*))')
-    PM_re = re.compile(r'(?P<message>[^ ]+ [^ ] \[INFO\] (?P<from>\S+) (.*) to (?P<to>\S+))')
+    warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
+    logins_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (\S+ (\[[^]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))|Connected players: (?P<players>.*)))')
+    chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
+    PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+) (.*) to (?P<to>\S+))')
+    java_re = re.compile(r'(?P<error>(?:java|at) .*)')
 
     @staticmethod
     def parse_line(line):
-        match = chat_re.match(line)
+        match = server_helpers.chat_re.match(line)
         if match:
             message = match.group('message')
             chat_message = match.group('chat')
-            name = match.group('name')
+            name = match.group('name').strip("<>[]")
             if not name == "CONSOLE":
                 server_helpers.player_cmd(name, chat_message)
-            curses_helpers.display_out(message, win_name="Messages")
+            curses_helpers.display_output(message, win_name="Messages")
             return
-        match = PM_re.match(line)
+        match = server_helpers.PM_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_out(message, win_name="Private Messages")
+            curses_helpers.display_output(message, win_name="Messages")
             return
-        match = logins_re.match(line)
+        match = server_helpers.logins_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_out(message, win_name="Players")
+            curses_helpers.display_output(message, win_name="Players")
             return
-        match = warning_re.match(line)
+        match = server_helpers.warning_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_out(message, win_name="Warnings")
-            curses_helpers.display_out(message, win_name="Minecraft Server")
+            curses_helpers.display_output(message, win_name="Warnings")
+            curses_helpers.display_output(message, win_name="Minecraft Server")
+            return
+        match = server_helpers.java_re.match(line)
+        if match:
+            message = match.group('message')
+            curses_helpers.display_output(message, win_name="Errors")
+            curses_helpers.display_output(message, win_name="Minecraft Server")
             return
         else:
-            curses_helpers.display_out(line, win_name="Minecraft Server")
+            curses_helpers.display_output(line, win_name="Minecraft Server")
         line = line.split()
 
     @staticmethod
-    def player_cmd(name, message):
+    def player_cmd(player, message):
         tokens = message.split()
         if tokens[0] == "loc":
-            server_helpers.cmd_queue.append(server_helpers.find_loc(player, map_location))
+            server_helpers.add_to_queue(server_helpers.find_loc(player, map_location))
 
     @staticmethod
     def find_loc(Player, map_location):
@@ -193,7 +200,9 @@ class server_helpers:
         (x,z,y) = nbt_file["Pos"].tags
         return "say %d %d %d" % (x.value,y.value,z.value)
 
-
+    @staticmethod
+    def add_to_queue(command):
+        server_helpers.cmd_queue.append("%s\n" % command)
 
 @atexit.register
 def clean_up():
@@ -229,9 +238,9 @@ def run():
         if console_input:
             curses_helpers.display_output(console_input)
             if current_win == main_names.index("Minecraft Server"):
-                server_helpers.cmd_queue.append(console_input)
+                server_helpers.add_to_queue(console_input)
             elif current_win == main_names.index("Messages"):
-                server_helpers.cmd_queue.append("say %s" % console_input)
+                server_helpers.add_to_queue("say %s" % console_input)
 
         for r in rlist:
             if r == server_proc.stdout or r == server_proc.stderr:
@@ -240,8 +249,8 @@ def run():
                     server_helpers.parse_line(line)
 
         if (len(server_helpers.cmd_queue) > 0):
-            command = server_helpers.cmd_queue.pop(0)
-            server_proc.stdin.write("%s" % command)
+            server_proc.stdin.writelines(server_helpers.cmd_queue)
+            server_helpers.cmd_queue = []
 
 
 if __name__ == "__main__":
