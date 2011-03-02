@@ -211,6 +211,7 @@ class server_helpers:
         if match:
             message = match.group('message')
             curses_helpers.display_output(message, win_name="Players", color="player")
+            curses_helpers.display_output(message, win_name="Messages", color="player")
             return
         match = server_helpers.warning_re.match(line)
         if match:
