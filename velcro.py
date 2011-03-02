@@ -15,12 +15,14 @@ import time
 import os
 import os.path
 import shutil
+import signal
 
 # grab this from the server.properties, yeah?
 map_location = "/home/landon/Desktop/mcbackupserver/"
 map_name = "unknown/"
 num_backups = 5
 backup_period = 10
+output_buffer_len = 100
 mem = "1024M"
 
 #Don't change anything below this line
@@ -32,9 +34,11 @@ server_proc = None
 input_buffer = ""
 main_wins = []
 main_names = []
+output_buffer = {}
 color_pairs = {}
 current_win = 0
 players = []
+interrupts = 0
 
 class curses_helpers:
     @staticmethod
@@ -73,6 +77,7 @@ class curses_helpers:
         stdscr.keypad(1)
         input_win.keypad(1)
         curses_helpers.display_window_name(main_names[current_win])
+        main_wins[current_win].window().refresh()
         separator_win.refresh()
         input_win.echochar(ord('>'))
         input_win.echochar(ord(' '))
@@ -80,15 +85,31 @@ class curses_helpers:
 
     @staticmethod
     def init_command_window(name):
-        global main_wins, stdscr, main_names
+        global main_wins, stdscr, main_names, output_buffer
         (height,width) = stdscr.getmaxyx()
         win = curses.newwin(height-2, width, 0, 0)
-        win.scrollok(True)
-        win.keypad(1)
-        win.refresh()
         panel = curses.panel.new_panel(win)
         main_wins.append(panel)
         main_names.append(name)
+        win.scrollok(True)
+        win.keypad(1)
+        if name not in output_buffer:
+            output_buffer[name] = []
+        curses_helpers.display_buffer(name)
+        win.refresh()
+
+    @staticmethod
+    def display_buffer(name):
+        global output_buffer
+        (height, width) = main_wins[main_names.index(name)].window().getmaxyx()
+        printed = 0
+        for line in reversed(output_buffer[name]):
+            wrapped_lines = textwrap.wrap(line[0], width)
+            for wrapped_line in wrapped_lines:
+                curses_helpers.display_output(wrapped_line, win_name = name,buffer_line=False, color=line[1])
+                printed += 1
+            if printed > height:
+                break
 
     @staticmethod
     def display_window_name(name):
@@ -105,8 +126,8 @@ class curses_helpers:
         separator_win.refresh()
 
     @staticmethod
-    def display_output(line, win=None, win_name=None, color=None):
-        global main_wins, main_names, current_win, color_pairs
+    def display_output(line, win=None, win_name=None, color=None, buffer_line=True):
+        global main_wins, main_names, current_win, color_pairs, output_buffer, output_buffer_len
         if win_name != None:
             win = main_names.index(win_name)
         if win == None:
@@ -127,6 +148,18 @@ class curses_helpers:
             window.refresh()
         else:
             main_wins[current_win].window().refresh()
+        if buffer_line:
+            if win != None and win_name == None:
+                win_name = main_names[win]
+            elif win == None and win_name == None:
+                win_name = main_names[current_win]
+            if color:
+                line_pair = (line, color)
+            else:
+                line_pair = (line, None)
+            output_buffer[win_name].append(line_pair)
+
+
 
     @staticmethod
     def retrieve_input():
@@ -279,21 +312,23 @@ class backup_helpers:
     backup_process = None
     in_progress = False
     time_last_backup = time.time()
+    color = 0
 
     @staticmethod
     def start_backup():
-        # going to create backup and then sort the filenames and delete the lowest, sine they will be named by date
+        global color_pairs
+        backup_helpers.color = (backup_helpers.color+1)%len(color_pairs)
         backup_helpers.in_progress = True
-        curses_helpers.display_output("Starting backups", win_name="Backups")
+        curses_helpers.display_output("Starting backups for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=backup_helpers.get_color())
         linkdest = backup_helpers.get_most_recent()
         linkdest_path = "%s%s" % (backup_helpers.backup_dir, linkdest)
         new_backup_dir = "%s%s" % (backup_helpers.backup_dir, time.strftime("%Y-%m-%d.%H-%M-%S"))
         if linkdest == None:
             args = shlex.split(backup_helpers.first_backup_command % (new_backup_dir))
-            curses_helpers.display_output(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups")
+            curses_helpers.display_output(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
         else:
             args = shlex.split(backup_helpers.backup_command % (linkdest_path, new_backup_dir))
-            curses_helpers.display_output(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups")
+            curses_helpers.display_output(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
         backup_helpers.backup_process = subprocess.Popen(args, \
             stdout=subprocess.PIPE, \
             stderr=subprocess.PIPE)
@@ -324,7 +359,20 @@ class backup_helpers:
             backup_path = "%s%s" % (backup_helpers.backup_dir, backup)
             shutil.rmtree(backup_path, True)
 
+    @staticmethod
+    def get_color():
+        global color_pairs
+        return color_pairs.keys()[backup_helpers.color]
 
+def graceful_exit(signum, frame):
+    global interrupts
+    if interrupts > 0:
+        curses_helpers.display_output("Caught SIGINT again, let's die")
+        sys.exit(0)
+    else:
+        curses_helpers.display_output("Caught SIGINT, stopping gracefully")
+        server_helpers.add_to_queue("stop")
+    interrupts += 1
 
 
 @atexit.register
@@ -349,10 +397,12 @@ def run():
     curses_helpers.init_curses()
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
     args = shlex.split(server_command)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     server_proc = subprocess.Popen(args, \
             stdin=subprocess.PIPE, \
             stdout=subprocess.PIPE, \
             stderr=subprocess.PIPE)
+    signal.signal(signal.SIGINT, graceful_exit)
 
     while server_proc.poll() == None:
         read_list = [server_proc.stdout, server_proc.stderr, sys.stdin]
@@ -390,7 +440,7 @@ def run():
                 if r == backup_helpers.backup_process.stdout or r == backup_helpers.backup_process.stderr:
                     line = r.readline().strip()
                     if len(line) > 0:
-                        curses_helpers.display_output(line, win_name="Backups")
+                        curses_helpers.display_output(line, win_name="Backups", color = backup_helpers.get_color())
 
         if (len(server_helpers.cmd_queue) > 0):
             server_proc.stdin.writelines(server_helpers.cmd_queue)
