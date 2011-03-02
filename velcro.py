@@ -78,7 +78,6 @@ class curses_helpers:
         input_win.keypad(1)
         curses_helpers.display_window_name(main_names[current_win])
         main_wins[current_win].window().refresh()
-        separator_win.refresh()
         input_win.echochar(ord('>'))
         input_win.echochar(ord(' '))
         input_win.nodelay(1)
@@ -96,7 +95,6 @@ class curses_helpers:
         if name not in output_buffer:
             output_buffer[name] = []
         curses_helpers.display_buffer(name)
-        win.refresh()
 
     @staticmethod
     def display_buffer(name):
