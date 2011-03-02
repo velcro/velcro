@@ -148,8 +148,7 @@ class curses_helpers:
                     input_win.echochar(char)
             elif char == curses.KEY_BACKSPACE:
                 (y,x) = input_win.getyx()
-                if len(input_buffer) > 0:
-                    input_buffer.pop()
+                input_buffer = input_buffer[:-1]
                 if x>2:
                     input_win.move(y,x-1)
                     input_win.delch(y,x-1)
