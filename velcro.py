@@ -34,6 +34,7 @@ main_wins = []
 main_names = []
 color_pairs = {}
 current_win = 0
+players = []
 
 class curses_helpers:
     @staticmethod
@@ -185,7 +186,7 @@ class curses_helpers:
 class server_helpers:
     cmd_queue = []
     warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
-    logins_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (\S+ (\[[^]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))|Connected players: (?P<players>.*)))')
+    logins_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] ((?P<player>\S+) (\[[^\]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))))')
     chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
     PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
     java_re = re.compile(r'(?P<error>(?:java|at) .*)')
@@ -195,6 +196,7 @@ class server_helpers:
 
     @staticmethod
     def parse_line(line):
+        global players
         match = server_helpers.chat_re.match(line)
         if match:
             message = match.group('message')
@@ -212,6 +214,11 @@ class server_helpers:
         match = server_helpers.logins_re.match(line)
         if match:
             message = match.group('message')
+            playername = match.group('player')
+            if playername in players:
+                players.remove(playername)
+            else:
+                players.append(playername)
             curses_helpers.display_output(message, win_name="Players", color="player")
             curses_helpers.display_output(message, win_name="Messages", color="player")
             return
@@ -236,9 +243,14 @@ class server_helpers:
 
     @staticmethod
     def player_cmd(player, message):
+        global players
         tokens = message.split()
-        if tokens[0] == "loc":
+        if tokens[0] == "!login_loc":
             server_helpers.add_to_queue(server_helpers.find_loc(player, map_location))
+        elif tokens[0] == "!list":
+            playerstr = ' '.join(players)
+            playerstr = "say Currently on: "+playerstr
+            server_helpers.add_to_queue(playerstr)
 
     @staticmethod
     def find_loc(Player, map_location):
@@ -332,7 +344,7 @@ def check_directories():
         os.makedirs("%s/velcro/backups/%s" % (map_location, map_name))
 
 def run():
-    global server_proc, map_location, mem
+    global server_proc, map_location, mem, players
     check_directories()
     curses_helpers.init_curses()
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
@@ -360,10 +372,14 @@ def run():
         console_input = curses_helpers.retrieve_input()
         if console_input:
             curses_helpers.display_output(console_input)
-            if current_win == main_names.index("Minecraft Server"):
-                server_helpers.add_to_queue(console_input)
-            elif current_win == main_names.index("Messages"):
-                server_helpers.add_to_queue("say %s" % console_input)
+            if console_input[0] != "!":
+                if current_win == main_names.index("Messages"):
+                    server_helpers.add_to_queue("say %s" % console_input)
+                elif current_win == main_names.index("Minecraft Server"):
+                    server_helpers.add_to_queue(console_input)
+            else:
+                if console_input == "!list":
+                    curses_helpers.display_output("Currently on: " + ' '.join(players), color='player')
 
         for r in rlist:
             if r == server_proc.stdout or r == server_proc.stderr:
