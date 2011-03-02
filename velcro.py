@@ -111,16 +111,19 @@ class curses_helpers:
 
     @staticmethod
     def display_window_name(name):
-        global separator_win
-        name = name+" |"
-        brand = "| Velcro"
+        global separator_win, players
+        name_str = name+" |"
+        brand_str = "| Velcro"
         (height, width) = separator_win.getmaxyx()
+        player_str = "| %d players " % len(players)
+        info_str = player_str+brand_str
         separator_win.move(0,0)
-        separator_win.insstr(name)
-        separator_win.move(0,len(name))
-        separator_win.hline(curses.ACS_HLINE, width-len(name)-len(brand))
-        separator_win.move(0,width-len(brand))
-        separator_win.insstr(brand)
+        separator_win.insstr(name_str)
+        separator_win.move(0,width-len(info_str))
+        separator_win.insstr(info_str)
+        if (width-len(name_str)-len(info_str)) > 0:
+            separator_win.move(0,len(name_str))
+            separator_win.hline(curses.ACS_HLINE, width-len(name_str)-len(info_str))
         separator_win.refresh()
 
     @staticmethod
