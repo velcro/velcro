@@ -101,7 +101,7 @@ class curses_helpers:
         global output_buffer
         (height, width) = main_wins[main_names.index(name)].window().getmaxyx()
         printed = 0
-        for line in reversed(output_buffer[name]):
+        for line in output_buffer[name][:height]:
             wrapped_lines = textwrap.wrap(line[0], width)
             for wrapped_line in wrapped_lines:
                 curses_helpers.display_output(wrapped_line, win_name = name,buffer_line=False, color=line[1])
