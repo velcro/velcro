@@ -189,6 +189,9 @@ class server_helpers:
     chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
     PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
     java_re = re.compile(r'(?P<error>(?:java|at) .*)')
+    save_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] CONSOLE: Save complete\.)')
+    saved = False
+    saving = False
 
     @staticmethod
     def parse_line(line):
@@ -224,8 +227,11 @@ class server_helpers:
             curses_helpers.display_output(message, win_name="Errors", color="error")
             curses_helpers.display_output(message, win_name="Minecraft Server", color="error")
             return
-        else:
-            curses_helpers.display_output(line, win_name="Minecraft Server", color="info")
+        match = server_helpers.save_re.match(line)
+        if match:
+            server_helpers.saved = True
+            server_helpers.saving = False
+        curses_helpers.display_output(line, win_name="Minecraft Server", color="info")
         line = line.split()
 
     @staticmethod
@@ -245,6 +251,15 @@ class server_helpers:
     def add_to_queue(command):
         server_helpers.cmd_queue.append("%s\n" % command)
 
+    @staticmethod
+    def save():
+        if not server_helpers.saving and not server_helpers.saved:
+            server_helpers.add_to_queue("save-off")
+            server_helpers.add_to_queue("save-all")
+            server_helpers.saving = True
+        else:
+            return server_helpers.saved
+
 class backup_helpers:
     backup_dir = "%s/velcro/backups/%s/" % (map_location, map_name)
     backup_command = "rsync -av --delete --link-dest=%s %s %s" % ("%s", "%s%s" % (map_location, map_name), "%s/")
@@ -256,6 +271,7 @@ class backup_helpers:
     @staticmethod
     def start_backup():
         # going to create backup and then sort the filenames and delete the lowest, sine they will be named by date
+        backup_helpers.in_progress = True
         curses_helpers.display_output("Starting backups", win_name="Backups")
         linkdest = backup_helpers.get_most_recent()
         linkdest_path = "%s%s" % (backup_helpers.backup_dir, linkdest)
@@ -365,19 +381,18 @@ def run():
             server_helpers.cmd_queue = []
 
         if (time.time()-backup_helpers.time_last_backup) > backup_period and not backup_helpers.in_progress:
-            backup_helpers.in_progress = True
-            server_helpers.add_to_queue("save-off")
-            server_helpers.add_to_queue("save-all")
-            server_helpers.add_to_queue("say Starting backups!")
-            backup_helpers.start_backup()
-        elif backup_helpers.in_progress:
+            continue_backup = server_helpers.save()
+            if continue_backup:
+                server_helpers.add_to_queue("say Starting backups!")
+                backup_helpers.start_backup()
+        elif backup_helpers.in_progress and server_helpers.saved:
             if backup_helpers.backup_process.poll() != None:
+                server_helpers.saved = False
                 backup_helpers.in_progress = False
                 backup_helpers.time_last_backup = time.time()
                 backup_helpers.backup_process = None
                 server_helpers.add_to_queue("save-on")
                 server_helpers.add_to_queue("say Backups over!")
-
 
 
 if __name__ == "__main__":
