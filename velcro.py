@@ -263,7 +263,7 @@ class server_helpers:
             return
         match = server_helpers.java_re.match(line)
         if match:
-            message = match.group('message')
+            message = match.group('error')
             curses_helpers.display_output(message, win_name="Errors", color="error")
             curses_helpers.display_output(message, win_name="Minecraft Server", color="error")
             return
