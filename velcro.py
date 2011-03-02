@@ -76,7 +76,7 @@ class curses_helpers:
         curses.curs_set(0)
         stdscr.keypad(1)
         input_win.keypad(1)
-        curses_helpers.display_window_name(main_names[current_win])
+        curses_helpers.display_window_name()
         main_wins[current_win].window().refresh()
         input_win.echochar(ord('>'))
         input_win.echochar(ord(' '))
@@ -110,8 +110,10 @@ class curses_helpers:
                 break
 
     @staticmethod
-    def display_window_name(name):
-        global separator_win, players
+    def display_window_name(name=None):
+        global separator_win, players, current_win, main_names
+        if name == None:
+            name = main_names[current_win]
         name_str = name+" |"
         brand_str = "| Velcro"
         (height, width) = separator_win.getmaxyx()
@@ -253,6 +255,7 @@ class server_helpers:
                 players.remove(playername)
             else:
                 players.append(playername)
+            curses_helpers.display_window_name()
             curses_helpers.display_output(message, win_name="Players", color="player")
             curses_helpers.display_output(message, win_name="Messages", color="player")
             return
