@@ -27,27 +27,29 @@ mem = "1024M"
 
 #Don't change anything below this line
 
-stdscr = None
-input_win = None
-separator_win = None
 server_proc = None
-input_buffer = ""
-main_wins = []
-main_names = []
-output_buffer = {}
-color_pairs = {}
-current_win = 0
-players = []
 interrupts = 0
 
-class curses_helpers:
-    @staticmethod
-    def init_curses():
-        global stdscr, input_win, separator_win, main_wins, current_win, main_names, color_pairs
-        main_wins = []
-        main_names = []
-        current_win = 0
-        stdscr = curses.initscr()
+class gui:
+    def __init__(self, output_buffer_len=100, buffers={}, current=0, players=0, input_buffer=""):
+        self.input_buffer = input_buffer
+        self.players = players
+        self.output_buffer_len = output_buffer_len
+        self.buffers = buffers
+        self.windows = {}
+        self.window_order = []
+        self.current_window = current
+        self.stdscr = curses.initscr()
+        (self.height, self.width) = self.stdscr.getmaxyx()
+        self.colors = {}
+        self.init_colors()
+        self.init_windows()
+        curses.noecho()
+        curses.cbreak()
+        curses.curs_set(0)
+        self.stdscr.keypad(1)
+
+    def init_colors(self):
         curses.start_color()
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_YELLOW, -1)
@@ -55,169 +57,136 @@ class curses_helpers:
         curses.init_pair(3, curses.COLOR_RED, -1)
         curses.init_pair(4, curses.COLOR_GREEN, -1)
         curses.init_pair(5, curses.COLOR_MAGENTA, -1)
-        color_pairs['warning'] = 1
-        color_pairs['info'] = 2
-        color_pairs['error'] = 3
-        color_pairs['chat'] = 4
-        color_pairs['player'] = 5
-        stdscr.refresh()
-        (height,width) = stdscr.getmaxyx()
-        input_win = curses.newwin(1, width, height-1, 0)
-        curses_helpers.init_command_window("Minecraft Server")
-        curses_helpers.init_command_window("Players")
-        curses_helpers.init_command_window("Messages")
-        curses_helpers.init_command_window("Warnings")
-        curses_helpers.init_command_window("Errors")
-        curses_helpers.init_command_window("Backups")
-        curses_helpers.init_command_window("Mapping")
-        separator_win = curses.newwin(1, width, height-2, 0)
-        curses.noecho()
-        curses.cbreak()
-        curses.curs_set(0)
-        stdscr.keypad(1)
-        input_win.keypad(1)
-        curses_helpers.display_window_name()
-        main_wins[current_win].window().refresh()
-        input_win.echochar(ord('>'))
-        input_win.echochar(ord(' '))
-        input_win.nodelay(1)
+        self.colors['warning'] = 1
+        self.colors['info'] = 2
+        self.colors['error'] = 3
+        self.colors['chat'] = 4
+        self.colors['player'] = 5
 
-    @staticmethod
-    def init_command_window(name):
-        global main_wins, stdscr, main_names, output_buffer
-        (height,width) = stdscr.getmaxyx()
-        win = curses.newwin(height-2, width, 0, 0)
-        panel = curses.panel.new_panel(win)
-        main_wins.append(panel)
-        main_names.append(name)
-        win.scrollok(True)
-        win.keypad(1)
-        if name not in output_buffer:
-            output_buffer[name] = []
-        curses_helpers.display_buffer(name)
+    def init_windows(self):
+        self.window_order = ["Minecraft Server", "Players", "Messages", "Warnings", "Errors", "Backups", "Mapping"]
+        for win_name in self.window_order:
+            self.init_main_window(win_name)
+        self.windows["Minecraft Server"].top()
+        # Keep this above the input_win and separator_win, otherwise it destroys them when called the first time
+        curses.panel.update_panels()
 
-    @staticmethod
-    def display_buffer(name):
-        global output_buffer
-        (height, width) = main_wins[main_names.index(name)].window().getmaxyx()
+        self.separator_win = curses.newwin(1, self.width, self.height-2, 0)
+        self.display_window_name()
+
+        self.input_win = curses.newwin(1, self.width, self.height-1, 0)
+        self.input_win.keypad(1)
+        self.input_win.nodelay(1)
+        self.input_win.echochar(ord('>'))
+        self.input_win.echochar(ord(' '))
+
+        self.windows[self.window_order[self.current_window]].window().refresh()
+
+    def init_main_window(self, window_name):
+        window = curses.newwin(self.height-2, self.width, 0, 0)
+        if window_name in self.windows:
+            self.windows[window_name].replace(window)
+        else:
+            panel = curses.panel.new_panel(window)
+            self.windows[window_name] = panel
+        window.scrollok(True)
+        window.keypad(1)
+        if window_name not in self.buffers:
+            self.buffers[window_name] = []
+        else:
+            self.display_buffer(window_name)
+
+    def display_buffer(self, buffer_name):
         printed = 0
-        for line in output_buffer[name][:height]:
-            wrapped_lines = textwrap.wrap(line[0], width)
+        for line in self.buffers[buffer_name][-self.height:]:
+            wrapped_lines = textwrap.wrap(line[0], self.width)
             for wrapped_line in wrapped_lines:
-                curses_helpers.display_output(wrapped_line, win_name = name,buffer_line=False, color=line[1])
+                self.display(wrapped_line, win_name=buffer_name, color=line[1], buffer_line=False)
                 printed += 1
-            if printed > height:
+            if printed > self.height:
                 break
 
-    @staticmethod
-    def display_window_name(name=None):
-        global separator_win, players, current_win, main_names
+    def display_window_name(self, name=None, players=None):
         if name == None:
-            name = main_names[current_win]
+            name = self.window_order[self.current_window]
         name_str = name+" |"
         brand_str = "| Velcro"
-        (height, width) = separator_win.getmaxyx()
-        player_str = "| %d players " % len(players)
+        if players != None:
+            self.players = players
+        player_str= "| %d players " % self.players
         info_str = player_str+brand_str
-        separator_win.move(0,0)
-        separator_win.insstr(name_str)
-        separator_win.move(0,width-len(info_str))
-        separator_win.insstr(info_str)
-        if (width-len(name_str)-len(info_str)) > 0:
-            separator_win.move(0,len(name_str))
-            separator_win.hline(curses.ACS_HLINE, width-len(name_str)-len(info_str))
-        separator_win.refresh()
+        if self.width > len(info_str)+len(name_str):
+            self.separator_win.move(0,0)
+            self.separator_win.insstr(name_str)
+            self.separator_win.move(0, self.width-len(info_str))
+            self.separator_win.insstr(info_str)
+            if (self.width-len(name_str)-len(info_str)) > 0:
+                self.separator_win.move(0, len(name_str))
+                self.separator_win.hline(curses.ACS_HLINE, self.width-len(name_str)-len(info_str))
+        self.separator_win.refresh()
 
-    @staticmethod
-    def display_output(line, win=None, win_name=None, color=None, buffer_line=True):
-        global main_wins, main_names, current_win, color_pairs, output_buffer, output_buffer_len
-        if win_name != None:
-            win = main_names.index(win_name)
-        if win == None:
-            window = main_wins[current_win].window()
-        else:
-            window = main_wins[win].window()
-        (height,width) = window.getmaxyx()
-        lines = textwrap.wrap(line, width)
-        for eachline in lines:
-            window.move(height-1,0)
+    def display(self, text, win_name=None, color=None, buffer_line=True):
+        if win_name == None:
+            win_name = self.window_order[self.current_window]
+        window = self.windows[win_name].window()
+        (height, width) = window.getmaxyx()
+        lines = textwrap.wrap(text, width)
+        for line in lines:
+            window.move(height-1, 0)
             window.scroll()
             if color == None:
-                window.insstr(eachline)
+                window.insstr(line)
             else:
-                color_id = color_pairs[color]
-                window.insstr(eachline, curses.color_pair(color_id))
-        if current_win == win:
+                color_id = self.colors[color]
+                window.insstr(line, curses.color_pair(color_id))
+        if win_name == self.window_order[self.current_window]:
             window.refresh()
-        else:
-            main_wins[current_win].window().refresh()
         if buffer_line:
-            if win != None and win_name == None:
-                win_name = main_names[win]
-            elif win == None and win_name == None:
-                win_name = main_names[current_win]
-            if color:
-                line_pair = (line, color)
-            else:
-                line_pair = (line, None)
-            output_buffer[win_name].append(line_pair)
+            text_pair = (text, color)
+            if len(self.buffers[win_name]) > self.output_buffer_len:
+                self.buffers[win_name].pop(0)
+            self.buffers[win_name].append(text_pair)
 
-
-
-    @staticmethod
-    def retrieve_input():
-        global input_win, input_buffer
+    def retrieve_input(self):
         while True:
-            char = input_win.getch()
+            char = self.input_win.getch()
             if char == -1:
                 break
-            if char <= 128:
+            elif char <= 128:
                 if char == ord('\n'):
-                    input_win.deleteln()
-                    input_win.move(0,0)
-                    input_win.echochar(ord('>'))
-                    input_win.echochar(ord(' '))
-                    retstr = input_buffer
-                    input_buffer = ""
+                    self.input_win.deleteln()
+                    self.input_win.move(0,0)
+                    self.input_win.echochar(ord('>'))
+                    self.input_win.echochar(ord(' '))
+                    retstr = self.input_buffer
+                    self.input_buffer = ""
                     return retstr
                 else:
-                    input_buffer += chr(char)
-                    input_win.echochar(char)
+                    self.input_buffer += chr(char)
+                    self.input_win.echochar(char)
             elif char == curses.KEY_BACKSPACE:
-                (y,x) = input_win.getyx()
-                input_buffer = input_buffer[:-1]
+                (y,x) = self.input_win.getyx()
+                self.input_buffer = self.input_buffer[:-1]
                 if x>2:
-                    input_win.move(y,x-1)
-                    input_win.delch(y,x-1)
+                    self.input_win.move(y,x-1)
+                    self.input_win.delch(y,x-1)
             else:
-                # it's a control signal or somesuch!
-                curses_helpers.control_input(char)
+                # It's a control signal!
+                self.control_input(char)
 
-
-    @staticmethod
-    def control_input(char):
-        global current_win, main_wins, main_names
+    def control_input(self, char):
         if char == curses.KEY_RESIZE:
-            curses_helpers.init_curses()
-        elif char == curses.KEY_RIGHT or char == curses.KEY_UP or char == curses.KEY_LEFT or char == curses.KEY_DOWN:
+            self.__init__(self.output_buffer_len, self.buffers, self.current_window, self.players, self.input_buffer)
+        elif char == curses.KEY_RIGHT or char == curses.KEY_LEFT:
             direction = 1
-            if char == curses.KEY_LEFT or char == curses.KEY_DOWN:
+            if char == curses.KEY_LEFT:
                 direction = -1
-            current_win = (current_win+direction)%len(main_wins)
-            curses_helpers.display_window_name(main_names[current_win])
-            main_wins[current_win].top()
+            self.current_window = (self.current_window+direction)%len(self.window_order)
+            self.display_window_name(self.window_order[self.current_window])
+            self.windows[self.window_order[self.current_window]].top()
             curses.panel.update_panels()
-            main_wins[current_win].window().refresh()
+            curses.panel.top_panel().window().refresh()
             curses.doupdate()
-
-    @staticmethod
-    def reset_curses():
-        global stdscr,input_win
-        curses.nocbreak()
-        stdscr.keypad(0)
-        input_win.keypad(0)
-        curses.echo()
-        curses.endwin()
 
 class server_helpers:
     cmd_queue = []
@@ -229,10 +198,11 @@ class server_helpers:
     save_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] CONSOLE: Save complete\.)')
     saved = False
     saving = False
+    gui = None
+    players = []
 
     @staticmethod
     def parse_line(line):
-        global players
         match = server_helpers.chat_re.match(line)
         if match:
             message = match.group('message')
@@ -240,52 +210,51 @@ class server_helpers:
             name = match.group('name').strip("<>[]")
             if not name == "CONSOLE":
                 server_helpers.player_cmd(name, chat_message)
-            curses_helpers.display_output(message, win_name="Messages", color="chat")
+            server_helpers.gui.display(message, win_name="Messages", color="chat")
             return
         match = server_helpers.PM_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Messages", color="chat")
+            server_helpers.gui.display(message, win_name="Messages", color="chat")
             return
         match = server_helpers.logins_re.match(line)
         if match:
             message = match.group('message')
             playername = match.group('player')
-            if playername in players:
-                players.remove(playername)
+            if playername in server_helpers.players:
+                server_helpers.players.remove(playername)
             else:
-                players.append(playername)
-            curses_helpers.display_window_name()
-            curses_helpers.display_output(message, win_name="Players", color="player")
-            curses_helpers.display_output(message, win_name="Messages", color="player")
+                server_helpers.players.append(playername)
+            server_helpers.gui.display_window_name(players=len(server_helpers.players))
+            server_helpers.gui.display(message, win_name="Players", color="player")
+            server_helpers.gui.display(message, win_name="Messages", color="player")
             return
         match = server_helpers.warning_re.match(line)
         if match:
             message = match.group('message')
-            curses_helpers.display_output(message, win_name="Warnings", color="warning")
-            curses_helpers.display_output(message, win_name="Minecraft Server", color="warning")
+            server_helpers.gui.display(message, win_name="Warnings", color="warning")
+            server_helpers.gui.display(message, win_name="Minecraft Server", color="warning")
             return
         match = server_helpers.java_re.match(line)
         if match:
             message = match.group('error')
-            curses_helpers.display_output(message, win_name="Errors", color="error")
-            curses_helpers.display_output(message, win_name="Minecraft Server", color="error")
+            server_helpers.gui.display(message, win_name="Errors", color="error")
+            server_helpers.gui.display(message, win_name="Minecraft Server", color="error")
             return
         match = server_helpers.save_re.match(line)
         if match:
             server_helpers.saved = True
             server_helpers.saving = False
-        curses_helpers.display_output(line, win_name="Minecraft Server", color="info")
+        server_helpers.gui.display(line, win_name="Minecraft Server", color="info")
         line = line.split()
 
     @staticmethod
     def player_cmd(player, message):
-        global players
         tokens = message.split()
         if tokens[0] == "!login_loc":
             server_helpers.add_to_queue(server_helpers.find_loc(player, map_location))
         elif tokens[0] == "!list":
-            playerstr = ' '.join(players)
+            playerstr = ' '.join(server_helpers.players)
             playerstr = "say Currently on: "+playerstr
             server_helpers.add_to_queue(playerstr)
 
@@ -317,22 +286,22 @@ class backup_helpers:
     in_progress = False
     time_last_backup = time.time()
     color = 0
+    gui = None
 
     @staticmethod
     def start_backup():
-        global color_pairs
-        backup_helpers.color = (backup_helpers.color+1)%len(color_pairs)
+        backup_helpers.color = (backup_helpers.color+1)%len(backup_helpers.gui.colors)
         backup_helpers.in_progress = True
-        curses_helpers.display_output("Starting backups for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=backup_helpers.get_color())
+        backup_helpers.gui.display("Starting backups for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=backup_helpers.get_color())
         linkdest = backup_helpers.get_most_recent()
         linkdest_path = "%s%s" % (backup_helpers.backup_dir, linkdest)
         new_backup_dir = "%s%s" % (backup_helpers.backup_dir, time.strftime("%Y-%m-%d.%H-%M-%S"))
         if linkdest == None:
             args = shlex.split(backup_helpers.first_backup_command % (new_backup_dir))
-            curses_helpers.display_output(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
+            backup_helpers.gui.display(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
         else:
             args = shlex.split(backup_helpers.backup_command % (linkdest_path, new_backup_dir))
-            curses_helpers.display_output(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
+            backup_helpers.gui.display(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
         backup_helpers.backup_process = subprocess.Popen(args, \
             stdout=subprocess.PIPE, \
             stderr=subprocess.PIPE)
@@ -365,16 +334,13 @@ class backup_helpers:
 
     @staticmethod
     def get_color():
-        global color_pairs
-        return color_pairs.keys()[backup_helpers.color]
+        return backup_helpers.gui.colors.keys()[backup_helpers.color]
 
 def graceful_exit(signum, frame):
     global interrupts
     if interrupts > 0:
-        curses_helpers.display_output("Caught SIGINT again, let's die")
         sys.exit(0)
     else:
-        curses_helpers.display_output("Caught SIGINT, stopping gracefully")
         server_helpers.add_to_queue("stop")
     interrupts += 1
 
@@ -382,7 +348,9 @@ def graceful_exit(signum, frame):
 @atexit.register
 def clean_up():
     global server_proc
-    curses_helpers.reset_curses()
+    curses.nocbreak()
+    curses.echo()
+    curses.endwin()
     try:
         traceback.print_last()
     except:
@@ -398,7 +366,9 @@ def check_directories():
 def run():
     global server_proc, map_location, mem, players
     check_directories()
-    curses_helpers.init_curses()
+    curses_gui = gui()
+    backup_helpers.gui = curses_gui
+    server_helpers.gui = curses_gui
     server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
     args = shlex.split(server_command)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -423,17 +393,17 @@ def run():
         except:
             continue
 
-        console_input = curses_helpers.retrieve_input()
+        console_input = curses_gui.retrieve_input()
         if console_input:
-            curses_helpers.display_output(console_input)
+            curses_gui.display(console_input)
             if console_input[0] != "!":
-                if current_win == main_names.index("Messages"):
+                if curses_gui.current_window == curses_gui.window_order.index("Messages"):
                     server_helpers.add_to_queue("say %s" % console_input)
-                elif current_win == main_names.index("Minecraft Server"):
+                elif curses_gui.current_window == curses_gui.window_order.index("Minecraft Server"):
                     server_helpers.add_to_queue(console_input)
             else:
                 if console_input == "!list":
-                    curses_helpers.display_output("Currently on: " + ' '.join(players), color='player')
+                    curses_gui.display("Currently on: " + ' '.join(server_helpers.players), color='player')
 
         for r in rlist:
             if r == server_proc.stdout or r == server_proc.stderr:
@@ -444,7 +414,7 @@ def run():
                 if r == backup_helpers.backup_process.stdout or r == backup_helpers.backup_process.stderr:
                     line = r.readline().strip()
                     if len(line) > 0:
-                        curses_helpers.display_output(line, win_name="Backups", color = backup_helpers.get_color())
+                        curses_gui.display(line, win_name="Backups", color = backup_helpers.get_color())
 
         if (len(server_helpers.cmd_queue) > 0):
             server_proc.stdin.writelines(server_helpers.cmd_queue)
