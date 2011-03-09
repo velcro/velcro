@@ -24,11 +24,11 @@ num_backups = 5
 backup_period = 10
 output_buffer_len = 100
 mem = "1024M"
+command_char = "!"
 
 #Don't change anything below this line
+server_global = None
 
-server_proc = None
-interrupts = 0
 
 class gui:
     def __init__(self, output_buffer_len=100, buffers={}, current=0, players=0, input_buffer=""):
@@ -188,166 +188,230 @@ class gui:
             curses.panel.top_panel().window().refresh()
             curses.doupdate()
 
-class server_helpers:
+class MinecraftServer:
+    server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
     cmd_queue = []
-    warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
-    logins_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] ((?P<player>\S+) (\[[^\]]+\] logged in with entity id \d+|lost connection: (?P<disconnect>.*))))')
-    chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
-    PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
-    java_re = re.compile(r'(?P<error>(?:java|at) .*)')
-    save_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] CONSOLE: Save complete\.)')
-    saved = False
-    saving = False
-    gui = None
+    save_state = None
+    process = None
     players = []
 
-    @staticmethod
-    def parse_line(line):
-        match = server_helpers.chat_re.match(line)
+    # Message parsing regexen
+    warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
+    login_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<player>\S+) (\[[^\]]+\] logged in with entity id \d+))')
+    logout_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] lost connection: (?P<disconnect>.*))')
+    chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
+    PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
+    java_re = re.compile(r'(?P<error>(?:java|at |\S+ \S+ \[SEVERE\]).*)')
+    save_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] CONSOLE: Save complete\.)')
+
+    def __init__(self, gui):
+        self.gui = gui
+        self.start()
+
+    def start(self):
+        args = shlex.split(self.server_command)
+        self.process = subprocess.Popen(args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+        self.stdin = self.process.stdin
+        self.stderr = self.process.stderr
+        self.stdout = self.process.stdout
+
+    def running(self):
+        if self.process == None:
+            return False
+        if self.process.poll() == None:
+            return True
+        return False
+
+    def force_save(self):
+        if self.save_state ==  None:
+            self.add_to_queue("save-off")
+            self.add_to_queue("save-all")
+            self.save_state = "saving"
+
+    def autosave(self):
+        self.add_to_queue("save-on")
+        self.save_state = None
+
+    def saved(self):
+        return self.save_state == "saved"
+
+    def saving(self):
+        return self.save_state == "saving"
+
+    def parse_line(self, line):
+        global command_char
+        match = self.chat_re.match(line)
         if match:
             message = match.group('message')
             chat_message = match.group('chat')
             name = match.group('name').strip("<>[]")
-            if not name == "CONSOLE":
-                server_helpers.player_cmd(name, chat_message)
-            server_helpers.gui.display(message, win_name="Messages", color="chat")
+            if not name == "CONSOLE" and chat_message[0] == command_char:
+                self.player_cmd(name, chat_message)
+            self.gui.display(message, win_name="Messages", color="chat")
             return
-        match = server_helpers.PM_re.match(line)
+        match = self.PM_re.match(line)
         if match:
             message = match.group('message')
-            server_helpers.gui.display(message, win_name="Messages", color="chat")
+            self.gui.display(message, win_name="Messages", color="chat")
             return
-        match = server_helpers.logins_re.match(line)
+        login_match = self.login_re.match(line)
+        logout_match = self.logout_re.match(line)
+        if login_match:
+            message = login_match.group('message')
+            playername = login_match.group('player')
+            self.players.append(playername)
+        if logout_match:
+            message = logout_match.group('message')
+            playername = logout_match.group('player')
+            self.players.remove(playername)
+        if login_match or logout_match:
+            self.gui.display_window_name(players=len(self.players))
+            self.gui.display(message, win_name="Players", color="player")
+            self.gui.display(message, win_name="Messages", color="player")
+            return
+        match = self.warning_re.match(line)
         if match:
             message = match.group('message')
-            playername = match.group('player')
-            if playername in server_helpers.players:
-                server_helpers.players.remove(playername)
-            else:
-                server_helpers.players.append(playername)
-            server_helpers.gui.display_window_name(players=len(server_helpers.players))
-            server_helpers.gui.display(message, win_name="Players", color="player")
-            server_helpers.gui.display(message, win_name="Messages", color="player")
+            self.gui.display(message, win_name="Warnings", color="warning")
+            self.gui.display(message, win_name="Minecraft Server", color="warning")
             return
-        match = server_helpers.warning_re.match(line)
-        if match:
-            message = match.group('message')
-            server_helpers.gui.display(message, win_name="Warnings", color="warning")
-            server_helpers.gui.display(message, win_name="Minecraft Server", color="warning")
-            return
-        match = server_helpers.java_re.match(line)
+        match = self.java_re.match(line)
         if match:
             message = match.group('error')
-            server_helpers.gui.display(message, win_name="Errors", color="error")
-            server_helpers.gui.display(message, win_name="Minecraft Server", color="error")
+            self.gui.display(message, win_name="Errors", color="error")
+            self.gui.display(message, win_name="Minecraft Server", color="error")
             return
-        match = server_helpers.save_re.match(line)
+        match = self.save_re.match(line)
         if match:
-            server_helpers.saved = True
-            server_helpers.saving = False
-        server_helpers.gui.display(line, win_name="Minecraft Server", color="info")
-        line = line.split()
+            self.save_state = "saved"
+        self.gui.display(line, win_name="Minecraft Server", color="info")
 
-    @staticmethod
-    def player_cmd(player, message):
+    def player_cmd(self, player, message):
         tokens = message.split()
-        if tokens[0] == "!login_loc":
-            server_helpers.add_to_queue(server_helpers.find_loc(player, map_location))
-        elif tokens[0] == "!list":
-            playerstr = ' '.join(server_helpers.players)
-            playerstr = "say Currently on: "+playerstr
-            server_helpers.add_to_queue(playerstr)
+        command = tokens[0][1:]
+        if command == "login_loc":
+            self.say("%d %d %d" % self.find_loc(player))
+        elif command == "list":
+            self.say(self.list_players(), player)
 
-    @staticmethod
-    def find_loc(Player, map_location):
-        nbt_filename = "%s%s/players/%s.dat" % (map_location, map_name, Player)
+    def list_players(self):
+        playerstr = "Currently on: " + ', '.join(self.players)
+        return playerstr
+
+    def say(self, message, player=None):
+        if player:
+            self.private_message(message, player)
+            return
+        self.add_to_queue("say %s" % message)
+
+    def private_msg(self, message, player):
+        self.add_to_queue("tell %s %s" % (player, message))
+
+    def add_to_queue(self, command):
+        self.cmd_queue.append("%s\n" % command)
+
+    def send_commands(self):
+        if len(self.cmd_queue) > 0:
+            self.stdin.writelines(self.cmd_queue)
+            self.cmd_queue = []
+
+    def find_loc(self, player):
+        global map_location, map_name
+        nbt_filename = "%s%s/players/%s.dat" % (map_location, map_name, player)
         nbt_file = nbt.NBTFile(nbt_filename, 'rb')
         (x,z,y) = nbt_file["Pos"].tags
-        return "say %d %d %d" % (x.value,y.value,z.value)
+        return (x.value,y.value,z.value)
 
-    @staticmethod
-    def add_to_queue(command):
-        server_helpers.cmd_queue.append("%s\n" % command)
-
-    @staticmethod
-    def save():
-        if not server_helpers.saving and not server_helpers.saved:
-            server_helpers.add_to_queue("save-off")
-            server_helpers.add_to_queue("save-all")
-            server_helpers.saving = True
-        else:
-            return server_helpers.saved
-
-class backup_helpers:
+class Backup:
     backup_dir = "%s/velcro/backups/%s/" % (map_location, map_name)
-    backup_command = "rsync -av --delete --link-dest=%s %s %s" % ("%s", "%s%s" % (map_location, map_name), "%s/")
-    first_backup_command = "rsync -av %s %s" % ("%s%s" % (map_location, map_name), "%s/")
-    backup_process = None
-    in_progress = False
-    time_last_backup = time.time()
+    backup_command = "rsync -av --delete --link-dest=%s %s %s" % ("%s", map_location+map_name, "%s/")
+    initial_backup_command = "rsync -av %s %s" % (map_location+map_name, "%s/")
     color = 0
+    last_backup = time.time()
     gui = None
+    process = None
 
-    @staticmethod
-    def start_backup():
-        backup_helpers.color = (backup_helpers.color+1)%len(backup_helpers.gui.colors)
-        backup_helpers.in_progress = True
-        backup_helpers.gui.display("Starting backups for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=backup_helpers.get_color())
-        linkdest = backup_helpers.get_most_recent()
-        linkdest_path = "%s%s" % (backup_helpers.backup_dir, linkdest)
-        new_backup_dir = "%s%s" % (backup_helpers.backup_dir, time.strftime("%Y-%m-%d.%H-%M-%S"))
+    def __init__(self, gui, num_backups):
+        self.num_backups = num_backups
+        self.gui = gui
+        self.gui.display("Running initial backup for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=self.get_color(1))
+        self.start()
+
+    def start(self):
+        self.color = (self.color+1)%len(self.gui.colors)
+        self.gui.display("Starting backups for %s" % time.strftime("%Y/%m/%d %H:%M:%S"), win_name="Backups", color=self.get_color())
+        linkdest = self.get_most_recent()
+        new_backup_dir = self.backup_dir + time.strftime("%Y-%m-%d.%H-%M-%S")
         if linkdest == None:
-            args = shlex.split(backup_helpers.first_backup_command % (new_backup_dir))
-            backup_helpers.gui.display(backup_helpers.first_backup_command % (new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
+            args = shlex.split(self.initial_backup_command % new_backup_dir)
+            self.gui.display(self.initial_backup_command % new_backup_dir, win_name="Backups", color=self.get_color())
         else:
-            args = shlex.split(backup_helpers.backup_command % (linkdest_path, new_backup_dir))
-            backup_helpers.gui.display(backup_helpers.backup_command % (linkdest_path, new_backup_dir), win_name="Backups", color=backup_helpers.get_color())
-        backup_helpers.backup_process = subprocess.Popen(args, \
-            stdout=subprocess.PIPE, \
-            stderr=subprocess.PIPE)
-        backup_helpers.trim_backups()
+            linkdest = self.get_most_recent()
+            linkdest_path = self.backup_dir + linkdest
+            args = shlex.split(self.backup_command % (linkdest_path, new_backup_dir))
+            self.gui.display(self.backup_command  % (linkdest_path, new_backup_dir), win_name="Backups", color=self.get_color())
 
-    @staticmethod
-    def get_most_recent():
-        backups = os.listdir(backup_helpers.backup_dir)
+        self.process = subprocess.Popen(args, \
+                stdout=subprocess.PIPE, \
+                stderr=subprocess.PIPE)
+
+        self.stdout = self.process.stdout
+        self.stderr = self.process.stderr
+        self.trim_backups()
+
+    def finish(self):
+        self.process = None
+        self.last_backup = time.time()
+
+    def running(self):
+        if self.process == None:
+            return False
+        if self.process.poll() == None:
+            return True
+        return False
+
+    def get_most_recent(self):
+        backups = os.listdir(self.backup_dir)
         if len(backups) == 0:
             return None
         else:
             backups.sort()
             return backups.pop()
 
-    @staticmethod
-    def get_least_recent():
+    def get_least_recent(self):
         least_recent = []
-        backups = os.listdir(backup_helpers.backup_dir)
+        backups = os.listdir(self.backup_dir)
         backups.sort()
-        while len(backups) > num_backups:
+        while len(backups) > self.num_backups:
             least_recent.append(backups.pop(0))
         return least_recent
 
-    @staticmethod
-    def trim_backups():
-        to_prune = backup_helpers.get_least_recent()
+    def trim_backups(self):
+        to_prune = self.get_least_recent()
         for backup in to_prune:
-            backup_path = "%s%s" % (backup_helpers.backup_dir, backup)
+            backup_path = self.backup_dir+backup
             shutil.rmtree(backup_path, True)
 
-    @staticmethod
-    def get_color():
-        return backup_helpers.gui.colors.keys()[backup_helpers.color]
+    def get_color(self, color=None):
+        if color == None:
+            return self.gui.colors.keys()[self.color]
+        else:
+            return self.gui.colors.keys()[color]
 
 def graceful_exit(signum, frame):
-    global interrupts
-    if interrupts > 0:
-        sys.exit(0)
+    global server_global
+    if server_global:
+        server_global.add_to_queue("stop")
     else:
-        server_helpers.add_to_queue("stop")
-    interrupts += 1
+        sys.exit(0)
 
 
 @atexit.register
 def clean_up():
-    global server_proc
+    global server_global
     curses.nocbreak()
     curses.echo()
     curses.endwin()
@@ -355,8 +419,9 @@ def clean_up():
         traceback.print_last()
     except:
         pass
-    if server_proc.poll() == None:
-        server_proc.terminate()
+    if server_global:
+        if server_global.running() == None:
+            server_global.process.terminate()
     print "Minecraft closed, so let's shut down."
 
 def check_directories():
@@ -364,25 +429,23 @@ def check_directories():
         os.makedirs("%s/velcro/backups/%s" % (map_location, map_name))
 
 def run():
-    global server_proc, map_location, mem, players
+    global map_location, map_name, mem, players, server_global, command_char, num_backups
     check_directories()
     curses_gui = gui()
-    backup_helpers.gui = curses_gui
-    server_helpers.gui = curses_gui
-    server_command = "java -Xmx%s -Xms%s -jar minecraft_server.jar nogui" % (mem,mem)
-    args = shlex.split(server_command)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    server_proc = subprocess.Popen(args, \
-            stdin=subprocess.PIPE, \
-            stdout=subprocess.PIPE, \
-            stderr=subprocess.PIPE)
-    signal.signal(signal.SIGINT, graceful_exit)
 
-    while server_proc.poll() == None:
-        read_list = [server_proc.stdout, server_proc.stderr, sys.stdin]
-        if backup_helpers.backup_process != None:
-            read_list.append(backup_helpers.backup_process.stdout)
-            read_list.append(backup_helpers.backup_process.stderr)
+    # Ignore before staring up the server so SIGINT is only handled by this script
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    server = MinecraftServer(curses_gui)
+    signal.signal(signal.SIGINT, graceful_exit)
+    server_global = server
+
+    backup = Backup(curses_gui, num_backups)
+
+    while server.running():
+        read_list = [server.stdout, server.stderr, sys.stdin]
+        if backup.running():
+            read_list.append(backup.stdout)
+            read_list.append(backup.stderr)
         try:
             (rlist, wlist, xlist) = select.select( \
                     read_list, \
@@ -396,44 +459,39 @@ def run():
         console_input = curses_gui.retrieve_input()
         if console_input:
             curses_gui.display(console_input)
-            if console_input[0] != "!":
+            if console_input[0] != command_char:
                 if curses_gui.current_window == curses_gui.window_order.index("Messages"):
-                    server_helpers.add_to_queue("say %s" % console_input)
+                    server.say(console_input)
                 elif curses_gui.current_window == curses_gui.window_order.index("Minecraft Server"):
-                    server_helpers.add_to_queue(console_input)
+                    server.add_to_queue(console_input)
             else:
-                if console_input == "!list":
-                    curses_gui.display("Currently on: " + ' '.join(server_helpers.players), color='player')
+                if console_input[1:] == "list":
+                    curses_gui.display(server.list_players(), color='player')
 
         for r in rlist:
-            if r == server_proc.stdout or r == server_proc.stderr:
+            if r == server.stdout or r == server.stderr:
                 line = r.readline().strip()
                 if len(line) > 0:
-                    server_helpers.parse_line(line)
-            elif backup_helpers.backup_process != None:
-                if r == backup_helpers.backup_process.stdout or r == backup_helpers.backup_process.stderr:
+                    server.parse_line(line)
+            elif backup.running():
+                if r == backup.stdout or r == backup.stderr:
                     line = r.readline().strip()
                     if len(line) > 0:
-                        curses_gui.display(line, win_name="Backups", color = backup_helpers.get_color())
+                        curses_gui.display(line, win_name="Backups", color = backup.get_color())
 
-        if (len(server_helpers.cmd_queue) > 0):
-            server_proc.stdin.writelines(server_helpers.cmd_queue)
-            server_helpers.cmd_queue = []
+        server.send_commands()
 
-        if (time.time()-backup_helpers.time_last_backup) > backup_period and not backup_helpers.in_progress:
-            continue_backup = server_helpers.save()
-            if continue_backup:
-                server_helpers.add_to_queue("say Starting backups!")
-                backup_helpers.start_backup()
-        elif backup_helpers.in_progress and server_helpers.saved:
-            if backup_helpers.backup_process.poll() != None:
-                server_helpers.saved = False
-                backup_helpers.in_progress = False
-                backup_helpers.time_last_backup = time.time()
-                backup_helpers.backup_process = None
-                server_helpers.add_to_queue("save-on")
-                server_helpers.add_to_queue("say Backups over!")
-
+        if not backup.running():
+            if server.saved():
+                server.autosave()
+                server.say("Backups over!")
+                backup.finish()
+            elif (time.time()-backup.last_backup) > backup_period:
+                # implied not server.saved()
+                if not server.saving():
+                    server.force_save()
+                    server.say("Starting backups!")
+                    backup.start()
 
 if __name__ == "__main__":
     run()
