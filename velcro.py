@@ -198,7 +198,7 @@ class MinecraftServer:
     # Message parsing regexen
     warning_re = re.compile(r'(?P<message>\S+ \S+ \[WARNING\] .*)')
     login_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<player>\S+) (\[[^\]]+\] logged in with entity id \d+))')
-    logout_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] lost connection: (?P<disconnect>.*))')
+    logout_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<player>\S+) lost connection: (?P<disconnect>.*))')
     chat_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<name>\[CONSOLE\]|\<\S+\>) (?P<chat>.*))')
     PM_re = re.compile(r'(?P<message>\S+ \S+ \[INFO\] (?P<from>\S+)[^: ] (.*) to (?P<to>\S+))')
     java_re = re.compile(r'(?P<error>(?:java|at |\S+ \S+ \[SEVERE\]).*)')
