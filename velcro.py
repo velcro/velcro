@@ -303,7 +303,7 @@ class MinecraftServer:
 
     def say(self, message, player=None):
         if player:
-            self.private_message(message, player)
+            self.private_msg(message, player)
             return
         self.add_to_queue("say %s" % message)
 
